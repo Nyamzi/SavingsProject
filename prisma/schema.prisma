@@ -1,0 +1,76 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  firstName     String
+  lastName      String
+  phone         String?
+  role          String    @default("MEMBER") // ADMIN or MEMBER
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  savings       Savings[]
+  loans         Loan[]
+  transactions  Transaction[]
+}
+
+model Savings {
+  id            String    @id @default(cuid())
+  userId        String
+  amount        Float     @default(0)
+  totalDeposits Float     @default(0)
+  totalWithdrawals Float  @default(0)
+  currentBalance Float    @default(0)  // Transaction/checking account balance
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId])
+}
+
+model Loan {
+  id              String      @id @default(cuid())
+  userId          String
+  amount          Float
+  interestRate    Float       @default(0)
+  duration        Int         // in months
+  status          String      @default("PENDING") // PENDING, APPROVED, REJECTED, ACTIVE, COMPLETED, OVERDUE
+  remainingAmount Float
+  totalRepaid     Float       @default(0)
+  approvedAt      DateTime?
+  dueDate         DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions    Transaction[]
+}
+
+model Transaction {
+  id              String          @id @default(cuid())
+  userId          String
+  loanId          String?
+  type            String          // DEPOSIT, WITHDRAWAL, LOAN, LOAN_REPAYMENT, INTEREST
+  amount          Float
+  description     String?
+  createdAt       DateTime        @default(now())
+  
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  loan            Loan?           @relation(fields: [loanId], references: [id], onDelete: SetNull)
+  
+  @@index([userId])
+  @@index([createdAt])
+}

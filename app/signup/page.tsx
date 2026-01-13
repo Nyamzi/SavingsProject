@@ -1,0 +1,186 @@
+'use client'
+
+import { useState } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { UserPlus } from 'lucide-react'
+
+const signupSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(6, 'Password must be at least 6 characters'),
+  firstName: z.string().min(1, 'First name is required'),
+  lastName: z.string().min(1, 'Last name is required'),
+  phone: z.string().optional(),
+})
+
+type SignupForm = z.infer<typeof signupSchema>
+
+export default function SignupPage() {
+  const router = useRouter()
+  const [error, setError] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<SignupForm>({
+    resolver: zodResolver(signupSchema),
+  })
+
+  const onSubmit = async (data: SignupForm) => {
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const response = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        setError(result.error || 'Signup failed')
+        return
+      }
+
+      // Store token
+      localStorage.setItem('token', result.token)
+      localStorage.setItem('user', JSON.stringify(result.user))
+
+      // Redirect to dashboard
+      router.push('/dashboard')
+    } catch (err) {
+      setError('An error occurred. Please try again.')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-red-50 flex items-center justify-center px-4 py-12">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
+        <div className="text-center mb-8">
+          <div className="flex items-center justify-center space-x-2 mb-4">
+            <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-red-500 rounded-lg flex items-center justify-center">
+              <span className="text-white font-bold text-2xl">🍉</span>
+            </div>
+            <span className="text-3xl font-bold text-gray-800">Watermelon Savings</span>
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Create Account</h1>
+          <p className="text-gray-600">Join Watermelon Savings today</p>
+        </div>
+
+        {error && (
+          <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-2">
+                First Name
+              </label>
+              <input
+                {...register('firstName')}
+                type="text"
+                id="firstName"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-gray-900"
+                placeholder="John"
+              />
+              {errors.firstName && (
+                <p className="mt-1 text-sm text-red-600">{errors.firstName.message}</p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-2">
+                Last Name
+              </label>
+              <input
+                {...register('lastName')}
+                type="text"
+                id="lastName"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-gray-900"
+                placeholder="Doe"
+              />
+              {errors.lastName && (
+                <p className="mt-1 text-sm text-red-600">{errors.lastName.message}</p>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
+              Email
+            </label>
+            <input
+              {...register('email')}
+              type="email"
+              id="email"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-gray-900"
+              placeholder="you@example.com"
+            />
+            {errors.email && (
+              <p className="mt-1 text-sm text-red-600">{errors.email.message}</p>
+            )}
+          </div>
+
+          <div>
+            <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-2">
+              Phone (Optional)
+            </label>
+            <input
+              {...register('phone')}
+              type="tel"
+              id="phone"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-gray-900"
+              placeholder="+1234567890"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
+              Password
+            </label>
+            <input
+              {...register('password')}
+              type="password"
+              id="password"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-gray-900"
+              placeholder="••••••••"
+            />
+            {errors.password && (
+              <p className="mt-1 text-sm text-red-600">{errors.password.message}</p>
+            )}
+          </div>
+
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full bg-gradient-to-r from-green-500 to-red-500 text-white py-3 rounded-lg font-semibold hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+          >
+            <UserPlus size={20} />
+            <span>{isLoading ? 'Creating account...' : 'Create Account'}</span>
+          </button>
+        </form>
+
+        <div className="mt-6 text-center">
+          <p className="text-gray-600">
+            Already have an account?{' '}
+            <Link href="/login" className="text-green-600 hover:text-green-700 font-semibold">
+              Sign in
+            </Link>
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
