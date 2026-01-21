@@ -42,7 +42,7 @@ export default function LoansPage() {
   const form = useForm<LoanRequestForm>({
     resolver: zodResolver(loanRequestSchema),
     defaultValues: {
-      interestRate: '5',
+      interestRate: '0',
     },
   })
 
@@ -79,7 +79,7 @@ export default function LoansPage() {
         },
         body: JSON.stringify({
           ...data,
-          interestRate: data.interestRate || '5',
+          interestRate: data.interestRate || '0',
         }),
       })
 

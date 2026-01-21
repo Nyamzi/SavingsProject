@@ -186,7 +186,7 @@ export default function Home() {
       <footer className="bg-gray-900 text-white py-10">
         <div className="container mx-auto px-4 text-center">
           <p className="text-gray-400 text-sm">
-            © 2024 Watermelon Savings. All rights reserved.
+            © 2024 By Wanyama David. All rights reserved.
           </p>
         </div>
       </footer>
