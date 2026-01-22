@@ -6,9 +6,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import {
   Plus,
-  CheckCircle,
-  XCircle,
-  Clock,
   AlertTriangle,
   FileText,
 } from 'lucide-react'
@@ -93,7 +90,6 @@ export default function LoansPage() {
   )
 
   // -------------------- STATS --------------------
-  // Only count APPROVED or ACTIVE loans
   const stats = useMemo(() => {
     const approvedLoans = loans.filter(
       (l) => l.status === 'APPROVED' || l.status === 'ACTIVE'
@@ -146,9 +142,12 @@ export default function LoansPage() {
     fetchLoans()
   }
 
+  // -------------------- REPAIR: FIXED --------------------
   const handleRepayment = async (data: RepayForm) => {
     if (!repayLoan) return
-    if (data.amount > repayLoan.remainingAmount) {
+
+    const repayAmount = parseFloat(data.amount as any)
+    if (repayAmount > repayLoan.remainingAmount) {
       alert('Amount exceeds remaining balance')
       return
     }
@@ -156,14 +155,38 @@ export default function LoansPage() {
     const token = localStorage.getItem('token')
     if (!token) return
 
-    await fetch(`/api/loans/${repayLoan.id}/repay`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    setRepayLoan(null)
-    repayForm.reset()
-    fetchLoans()
+    try {
+      const res = await fetch('/api/loans/repay', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          loanId: repayLoan.id,
+          amount: repayAmount,
+        }),
+      })
+
+      const result = await res.json()
+
+      if (!res.ok) {
+        alert(result.error || 'Failed to process repayment')
+        return
+      }
+
+      // Update local UI immediately
+      const updatedLoan = result.loan
+      setLoans((prev) =>
+        prev.map((l) => (l.id === updatedLoan.id ? updatedLoan : l))
+      )
+
+      setRepayLoan(null)
+      repayForm.reset()
+    } catch (err) {
+      console.error('Repayment error:', err)
+      alert('Something went wrong')
+    }
   }
 
   const downloadStatement = (loan: Loan) => {
@@ -197,7 +220,7 @@ export default function LoansPage() {
     return <div className="py-20 text-center text-slate-500">Loading loans…</div>
   }
 
-  /* -------------------- AMORTIZATION CALCULATION -------------------- */
+  /* -------------------- AMORTIZATION -------------------- */
   const generateAmortization = (loan: Loan) => {
     const schedule = []
     const monthlyRate = loan.interestRate / 100 / 12
@@ -227,7 +250,6 @@ export default function LoansPage() {
   }
 
   /* -------------------- UI -------------------- */
-
   return (
     <div className="min-h-screen bg-slate-50 p-6 space-y-8">
       {/* Header */}
@@ -237,8 +259,7 @@ export default function LoansPage() {
           onClick={() => setShowRequestModal(true)}
           className="bg-blue-600 text-white px-6 py-3 rounded-lg shadow hover:bg-blue-700 flex items-center gap-2"
         >
-          <Plus size={18} />
-          New Loan
+          <Plus size={18} /> New Loan
         </button>
       </div>
 
@@ -346,6 +367,7 @@ export default function LoansPage() {
       )}
 
       {/* -------------------- MODALS -------------------- */}
+
       {showRequestModal && (
         <Modal title="Request Loan" onClose={() => setShowRequestModal(false)}>
           <form onSubmit={requestForm.handleSubmit(handleLoanRequest)} className="space-y-4">
@@ -363,7 +385,14 @@ export default function LoansPage() {
             Remaining balance: {formatCurrency(repayLoan.remainingAmount)}
           </p>
           <form onSubmit={repayForm.handleSubmit(handleRepayment)} className="space-y-4">
-            <Input {...repayForm.register('amount')} placeholder="Amount" />
+            <Input
+              {...repayForm.register('amount')}
+              placeholder="Amount"
+              type="number"
+              step="0.01"
+              min="0"
+              max={repayLoan.remainingAmount}
+            />
             <PrimaryButton>Confirm Payment</PrimaryButton>
           </form>
         </Modal>
