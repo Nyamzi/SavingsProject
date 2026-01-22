@@ -8,8 +8,10 @@ import {
   Plus,
   AlertTriangle,
   FileText,
+  Download,
 } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import jsPDF from 'jspdf'
 
 /* -------------------- SCHEMAS -------------------- */
 
@@ -47,10 +49,12 @@ interface Loan {
 export default function LoansPage() {
   const [loans, setLoans] = useState<Loan[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'REPAY' | 'HISTORY'>('REPAY')
+  const [activeTab, setActiveTab] = useState<'REPAY' | 'HISTORY'>('HISTORY')
   const [showRequestModal, setShowRequestModal] = useState(false)
   const [repayLoan, setRepayLoan] = useState<Loan | null>(null)
   const [viewStatement, setViewStatement] = useState<Loan | null>(null)
+  const [statementFrequency, setStatementFrequency] = useState<'MONTHLY' | 'WEEKLY' | 'DAILY'>('MONTHLY')
+  const [repayFrequency, setRepayFrequency] = useState<'MONTHLY' | 'WEEKLY' | 'DAILY'>('MONTHLY')
 
   const requestForm = useForm<LoanRequestForm>({
     resolver: zodResolver(loanRequestSchema),
@@ -233,30 +237,150 @@ export default function LoansPage() {
     document.body.removeChild(link)
   }
 
+  const downloadSectionPdf = (title: string, items: Loan[]) => {
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const margin = 12
+    let y = 14
+
+    // Header with logo-like mark
+    doc.setFillColor(22, 163, 74) // green
+    doc.roundedRect(margin, y - 6, 12, 12, 2, 2, 'F')
+    doc.setFillColor(220, 38, 38) // red
+    doc.circle(margin + 8.5, y - 0.5, 3.5, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(8)
+    doc.text('WS', margin + 2, y + 1)
+
+    doc.setTextColor(15, 23, 42)
+    doc.setFontSize(14)
+    doc.text('Watermelon Savings', margin + 18, y + 2)
+    y += 10
+
+    doc.setFontSize(12)
+    doc.text(`${title} Report`, margin, y)
+    y += 6
+
+    doc.setFontSize(9)
+    doc.setTextColor(100, 116, 139)
+    doc.text(`Generated: ${new Date().toLocaleDateString()}`, margin, y)
+    y += 8
+
+    // Summary
+    doc.setTextColor(15, 23, 42)
+    doc.setFontSize(10)
+    doc.text(`Total loans: ${items.length}`, margin, y)
+    y += 8
+
+    // Table header
+    const columns = [
+      { label: 'Loan ID', width: 20 },
+      { label: 'Amount', width: 26 },
+      { label: 'Interest', width: 18 },
+      { label: 'Duration', width: 18 },
+      { label: 'Expected', width: 26 },
+      { label: 'Repaid', width: 24 },
+      { label: 'Remaining', width: 26 },
+      { label: 'Status', width: 18 },
+    ]
+
+    const headerY = y
+    doc.setFillColor(241, 245, 249)
+    doc.rect(margin, headerY - 4, pageWidth - margin * 2, 8, 'F')
+    doc.setFontSize(9)
+    doc.setTextColor(30, 41, 59)
+
+    let x = margin
+    columns.forEach((col) => {
+      doc.text(col.label, x + 1, headerY + 1)
+      x += col.width
+    })
+
+    y = headerY + 8
+
+    const addRow = (values: string[], zebra: boolean) => {
+      if (y > 285) {
+        doc.addPage()
+        y = 14
+      }
+
+      if (zebra) {
+        doc.setFillColor(248, 250, 252)
+        doc.rect(margin, y - 4, pageWidth - margin * 2, 7, 'F')
+      }
+
+      doc.setTextColor(51, 65, 85)
+      doc.setFontSize(8.5)
+      let colX = margin
+      values.forEach((val, index) => {
+        doc.text(val, colX + 1, y + 1)
+        colX += columns[index].width
+      })
+      y += 7
+    }
+
+    if (items.length === 0) {
+      addRow(['No loans in this category.', '', '', '', '', '', '', ''], false)
+    } else {
+      items.forEach((loan, index) => {
+        addRow(
+          [
+            loan.id.slice(0, 8),
+            formatCurrency(loan.amount),
+            `${loan.interestRate}%`,
+            `${loan.duration}m`,
+            formatCurrency(loan.totalExpected),
+            formatCurrency(loan.totalRepaid),
+            formatCurrency(remainingBalance(loan)),
+            loan.status,
+          ],
+          index % 2 === 1
+        )
+      })
+    }
+
+    doc.save(`${title.replace(/\s+/g, '_')}_Report.pdf`)
+  }
+
   if (loading) {
     return <div className="py-20 text-center text-slate-500">Loading loans…</div>
   }
 
   /* -------------------- AMORTIZATION -------------------- */
-  const generateAmortization = (loan: Loan) => {
+  const getScheduleConfig = (loan: Loan, frequency: 'MONTHLY' | 'WEEKLY' | 'DAILY') => {
+    const annualRate = loan.interestRate / 100
+    if (frequency === 'DAILY') {
+      return { periods: loan.duration * 30, rate: annualRate / 365, label: 'day' }
+    }
+    if (frequency === 'WEEKLY') {
+      return { periods: loan.duration * 4, rate: annualRate / 52, label: 'week' }
+    }
+    return { periods: loan.duration, rate: annualRate / 12, label: 'month' }
+  }
+
+  const generateAmortization = (
+    loan: Loan,
+    frequency: 'MONTHLY' | 'WEEKLY' | 'DAILY' = 'MONTHLY'
+  ) => {
     const schedule = []
-    const monthlyRate = loan.interestRate / 100 / 12
+    const config = getScheduleConfig(loan, frequency)
+    const periodRate = config.rate
     const principal = loan.amount
-    const n = loan.duration
-    const monthly =
+    const n = Math.max(1, config.periods)
+    const payment =
       n > 0
-        ? (principal * monthlyRate) / (1 - Math.pow(1 + monthlyRate, -n)) || principal / n
+        ? (principal * periodRate) / (1 - Math.pow(1 + periodRate, -n)) || principal / n
         : principal
 
     let remaining = principal
 
     for (let i = 1; i <= n; i++) {
-      const interest = remaining * monthlyRate
-      const principalPaid = monthly - interest
+      const interest = remaining * periodRate
+      const principalPaid = payment - interest
       remaining = Math.max(0, remaining - principalPaid)
       schedule.push({
         month: i,
-        payment: monthly,
+        payment: payment,
         principal: principalPaid,
         interest,
         remaining,
@@ -272,12 +396,20 @@ export default function LoansPage() {
       {/* Header */}
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-slate-900">Loans</h1>
-        <button
-          onClick={() => setShowRequestModal(true)}
-          className="bg-blue-600 text-white px-6 py-3 rounded-lg shadow hover:bg-blue-700 flex items-center gap-2"
-        >
-          <Plus size={18} /> New Loan
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setActiveTab('REPAY')}
+            className="bg-blue-600 text-white px-6 py-3 rounded-lg shadow hover:bg-blue-700 flex items-center gap-2"
+          >
+            <Plus size={18} /> Repay Loans
+          </button>
+          <button
+            onClick={() => setShowRequestModal(true)}
+            className="bg-blue-600 text-white px-6 py-3 rounded-lg shadow hover:bg-blue-700 flex items-center gap-2"
+          >
+            <Plus size={18} /> New Loan
+          </button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -290,7 +422,6 @@ export default function LoansPage() {
 
       {/* Tabs */}
       <div className="flex gap-4 border-b border-slate-200 pb-2">
-        <Tab active={activeTab === 'REPAY'} onClick={() => setActiveTab('REPAY')}>Repay Loans</Tab>
         <Tab active={activeTab === 'HISTORY'} onClick={() => setActiveTab('HISTORY')}>Loan History</Tab>
       </div>
 
@@ -374,9 +505,18 @@ export default function LoansPage() {
             },
           ].map((section) => (
             <div key={section.title} className="space-y-4">
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900">{section.title}</h3>
-                <p className="text-sm text-slate-500">{section.subtitle}</p>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900">{section.title}</h3>
+                  <p className="text-sm text-slate-500">{section.subtitle}</p>
+                </div>
+                <button
+                  onClick={() => downloadSectionPdf(section.title, section.items)}
+                  className="inline-flex items-center gap-2 text-sm bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800"
+                >
+                  <Download size={16} />
+                  Download PDF
+                </button>
               </div>
 
               {section.items.length === 0 ? (
@@ -435,6 +575,29 @@ export default function LoansPage() {
           <p className="text-sm text-slate-600 mb-2">
             Remaining balance: {formatCurrency(remainingBalance(repayLoan))}
           </p>
+          <div className="flex items-center gap-2 mb-3 text-sm">
+            <span className="text-slate-600">Repayment plan:</span>
+            {(['MONTHLY', 'WEEKLY', 'DAILY'] as const).map((freq) => (
+              <button
+                key={freq}
+                onClick={() => setRepayFrequency(freq)}
+                className={`px-3 py-1 rounded-full border ${
+                  repayFrequency === freq
+                    ? 'bg-blue-100 border-blue-300 text-blue-700'
+                    : 'bg-white border-slate-200 text-slate-600 hover:text-slate-800'
+                }`}
+              >
+                {freq[0] + freq.slice(1).toLowerCase()}
+              </button>
+            ))}
+          </div>
+          <p className="text-sm text-slate-600 mb-3">
+            You should pay{' '}
+            <span className="font-semibold text-slate-900">
+              {formatCurrency(generateAmortization(repayLoan, repayFrequency)[0]?.payment || 0)}
+            </span>{' '}
+            per {repayFrequency.toLowerCase().slice(0, -2)}.
+          </p>
           <form onSubmit={repayForm.handleSubmit(handleRepayment)} className="space-y-4">
             <Input
               {...repayForm.register('amount')}
@@ -463,11 +626,53 @@ export default function LoansPage() {
             </button>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="grid md:grid-cols-3 gap-3 mb-4 text-sm text-slate-700">
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+              <p className="text-xs text-slate-500">Monthly Payment</p>
+              <p className="font-semibold text-slate-900">
+                {formatCurrency(generateAmortization(viewStatement, 'MONTHLY')[0]?.payment || 0)}
+              </p>
+            </div>
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+              <p className="text-xs text-slate-500">Weekly Payment</p>
+              <p className="font-semibold text-slate-900">
+                {formatCurrency(generateAmortization(viewStatement, 'WEEKLY')[0]?.payment || 0)}
+              </p>
+            </div>
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+              <p className="text-xs text-slate-500">Daily Payment</p>
+              <p className="font-semibold text-slate-900">
+                {formatCurrency(generateAmortization(viewStatement, 'DAILY')[0]?.payment || 0)}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 mb-3 text-sm">
+            <span className="text-slate-600">Schedule:</span>
+            {(['MONTHLY', 'WEEKLY', 'DAILY'] as const).map((freq) => (
+              <button
+                key={freq}
+                onClick={() => setStatementFrequency(freq)}
+                className={`px-3 py-1 rounded-full border ${
+                  statementFrequency === freq
+                    ? 'bg-blue-100 border-blue-300 text-blue-700'
+                    : 'bg-white border-slate-200 text-slate-600 hover:text-slate-800'
+                }`}
+              >
+                {freq[0] + freq.slice(1).toLowerCase()}
+              </button>
+            ))}
+          </div>
+
+          <div
+            className={`overflow-x-auto ${
+              statementFrequency === 'DAILY' ? 'max-h-[420px] overflow-y-auto' : ''
+            }`}
+          >
             <table className="w-full text-sm text-slate-700 border border-slate-200 rounded-lg">
               <thead className="bg-slate-100">
                 <tr>
-                  <th className="p-2 border-b">Month</th>
+                  <th className="p-2 border-b">Period</th>
                   <th className="p-2 border-b">Payment</th>
                   <th className="p-2 border-b">Principal</th>
                   <th className="p-2 border-b">Interest</th>
@@ -475,13 +680,26 @@ export default function LoansPage() {
                 </tr>
               </thead>
               <tbody>
-                {generateAmortization(viewStatement).map((row) => {
+                {generateAmortization(viewStatement, statementFrequency).map((row) => {
                   const loanStart = new Date(viewStatement.approvedAt || viewStatement.createdAt)
-                  const paymentDueDate = new Date(
-                    loanStart.getFullYear(),
-                    loanStart.getMonth() + row.month,
-                    loanStart.getDate()
-                  )
+                  const periodLength =
+                    statementFrequency === 'DAILY'
+                      ? 1
+                      : statementFrequency === 'WEEKLY'
+                      ? 7
+                      : 30
+                  const paymentDueDate =
+                    statementFrequency === 'MONTHLY'
+                      ? new Date(
+                          loanStart.getFullYear(),
+                          loanStart.getMonth() + row.month,
+                          loanStart.getDate()
+                        )
+                      : new Date(
+                          loanStart.getFullYear(),
+                          loanStart.getMonth(),
+                          loanStart.getDate() + row.month * periodLength
+                        )
                   const isOverdue = paymentDueDate < new Date()
                   return (
                     <tr
