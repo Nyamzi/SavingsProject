@@ -53,6 +53,9 @@ export async function POST(
       return NextResponse.json({ error: 'User savings account not found' }, { status: 404 })
     }
 
+    const totalExpected =
+      Number(loan.amount) + (Number(loan.amount) * Number(loan.interestRate)) / 100
+
     // Approve the loan and add loan amount to current balance
     const approvedLoan = await prisma.loan.update({
       where: { id: loanId },
@@ -60,6 +63,7 @@ export async function POST(
         status: 'APPROVED',
         approvedAt: new Date(),
         dueDate: dueDate,
+        remainingAmount: totalExpected,
       },
     })
 

@@ -83,23 +83,30 @@ export default function LoansPage() {
     }
   }
 
-  const repayableLoans = loans.filter(
-    (l) =>
-      (l.status === 'APPROVED' || l.status === 'ACTIVE') &&
-      l.remainingAmount > 0
-  )
+  const repayableLoans = loans.filter((l) => {
+    const remaining = Math.max(0, l.totalExpected - l.totalRepaid)
+    return (l.status === 'APPROVED' || l.status === 'ACTIVE') && remaining > 0
+  })
 
   // -------------------- STATS --------------------
   const stats = useMemo(() => {
-    const approvedLoans = loans.filter(
-      (l) => l.status === 'APPROVED' || l.status === 'ACTIVE'
+    const borrowedLoans = loans.filter((l) =>
+      l.status === 'APPROVED' || l.status === 'ACTIVE' || l.status === 'COMPLETED'
     )
 
-    return {
-      borrowed: approvedLoans.reduce((s, l) => s + l.amount, 0),
-      repaid: approvedLoans.reduce((s, l) => s + l.totalRepaid, 0),
-      remaining: approvedLoans.reduce((s, l) => s + l.remainingAmount, 0),
-    }
+    const borrowed = borrowedLoans.reduce((s, l) => s + l.amount, 0)
+    const repaid = borrowedLoans.reduce((s, l) => s + l.totalRepaid, 0)
+    const interestPaid = borrowedLoans.reduce((s, l) => {
+      const totalExpected = l.totalExpected
+      const paid = Math.min(l.totalRepaid, totalExpected)
+      return s + Math.max(0, paid - l.amount)
+    }, 0)
+    const remaining = borrowedLoans.reduce(
+      (s, l) => s + Math.max(0, l.totalExpected - l.totalRepaid),
+      0
+    )
+
+    return { borrowed, repaid, interestPaid, remaining }
   }, [loans])
 
   const remainingMonths = (dueDate: string | null) => {
@@ -115,6 +122,9 @@ export default function LoansPage() {
 
   const monthlyInstallment = (loan: Loan) =>
     loan.duration > 0 ? loan.totalExpected / loan.duration : 0
+
+  const remainingBalance = (loan: Loan) =>
+    Math.max(0, loan.totalExpected - loan.totalRepaid)
 
   const dueStatus = (loan: Loan) => {
     if (!loan.dueDate) return null
@@ -132,11 +142,18 @@ export default function LoansPage() {
   const handleLoanRequest = async (data: LoanRequestForm) => {
     const token = localStorage.getItem('token')
     if (!token) return
-    await fetch('/api/loans/request', {
+    const res = await fetch('/api/loans/request', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
+
+    const result = await res.json()
+    if (!res.ok) {
+      alert(result.error || 'Loan request failed')
+      return
+    }
+
     setShowRequestModal(false)
     requestForm.reset()
     fetchLoans()
@@ -147,7 +164,7 @@ export default function LoansPage() {
     if (!repayLoan) return
 
     const repayAmount = parseFloat(data.amount as any)
-    if (repayAmount > repayLoan.remainingAmount) {
+    if (repayAmount > remainingBalance(repayLoan)) {
       alert('Amount exceeds remaining balance')
       return
     }
@@ -264,9 +281,10 @@ export default function LoansPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid md:grid-cols-3 gap-4">
+      <div className="grid md:grid-cols-4 gap-4">
         <Stat label="Total Borrowed" value={stats.borrowed} />
         <Stat label="Total Repaid" value={stats.repaid} />
+        <Stat label="Interest Paid" value={stats.interestPaid} />
         <Stat label="Remaining Balance" value={stats.remaining} />
       </div>
 
@@ -292,7 +310,7 @@ export default function LoansPage() {
                 <div className="flex justify-between">
                   <div>
                     <p className="text-lg font-semibold text-slate-900">
-                      {formatCurrency(loan.remainingAmount)} remaining
+                      {formatCurrency(remainingBalance(loan))} remaining
                     </p>
                     <p className="text-sm text-slate-600">
                       Due {formatDate(loan.dueDate!)} • {remainingMonths(loan.dueDate)} months left
@@ -335,32 +353,65 @@ export default function LoansPage() {
 
       {/* HISTORY TAB */}
       {activeTab === 'HISTORY' && (
-        <div className="space-y-6">
-          {loans.map((loan) => (
-            <div
-              key={loan.id}
-              className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm"
-            >
-              <div className="flex justify-between mb-3">
-                <div>
-                  <p className="text-xl font-bold text-slate-900">
-                    {formatCurrency(loan.amount)}
-                  </p>
-                  <p className="text-sm text-slate-600">
-                    {loan.interestRate}% • {loan.duration} months
-                  </p>
-                </div>
-                <StatusBadge status={loan.status} />
+        <div className="space-y-8">
+          {[
+            {
+              title: 'Approved Loans',
+              subtitle: 'Loans that are approved or active',
+              items: loans.filter((l) => l.status === 'APPROVED' || l.status === 'ACTIVE'),
+            },
+            {
+              title: 'Completed Loans',
+              subtitle: 'Loans fully repaid',
+              items: loans.filter(
+                (l) => l.status === 'COMPLETED' && remainingBalance(l) === 0
+              ),
+            },
+            {
+              title: 'Rejected Loans',
+              subtitle: 'Loan requests that were rejected',
+              items: loans.filter((l) => l.status === 'REJECTED'),
+            },
+          ].map((section) => (
+            <div key={section.title} className="space-y-4">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">{section.title}</h3>
+                <p className="text-sm text-slate-500">{section.subtitle}</p>
               </div>
 
-              <div className="grid md:grid-cols-2 gap-3 text-sm text-slate-700">
-                <p><strong>Requested:</strong> {formatDate(loan.createdAt)}</p>
-                {loan.approvedAt && <p><strong>Approved:</strong> {formatDate(loan.approvedAt)}</p>}
-                {loan.dueDate && <p><strong>Due:</strong> {formatDate(loan.dueDate)}</p>}
-                <p><strong>Total expected:</strong> {formatCurrency(loan.totalExpected)}</p>
-                <p><strong>Total repaid:</strong> {formatCurrency(loan.totalRepaid)}</p>
-                <p><strong>Remaining:</strong> {formatCurrency(loan.remainingAmount)}</p>
-              </div>
+              {section.items.length === 0 ? (
+                <div className="text-sm text-slate-500 bg-white border border-slate-200 rounded-xl p-4">
+                  No loans in this category
+                </div>
+              ) : (
+                section.items.map((loan) => (
+                  <div
+                    key={loan.id}
+                    className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm"
+                  >
+                    <div className="flex justify-between mb-3">
+                      <div>
+                        <p className="text-xl font-bold text-slate-900">
+                          {formatCurrency(loan.amount)}
+                        </p>
+                        <p className="text-sm text-slate-600">
+                          {loan.interestRate}% • {loan.duration} months
+                        </p>
+                      </div>
+                      <StatusBadge status={loan.status} />
+                    </div>
+
+                    <div className="grid md:grid-cols-2 gap-3 text-sm text-slate-700">
+                      <p><strong>Requested:</strong> {formatDate(loan.createdAt)}</p>
+                      {loan.approvedAt && <p><strong>Approved:</strong> {formatDate(loan.approvedAt)}</p>}
+                      {loan.dueDate && <p><strong>Due:</strong> {formatDate(loan.dueDate)}</p>}
+                      <p><strong>Total expected:</strong> {formatCurrency(loan.totalExpected)}</p>
+                      <p><strong>Total repaid:</strong> {formatCurrency(loan.totalRepaid)}</p>
+                      <p><strong>Remaining:</strong> {formatCurrency(remainingBalance(loan))}</p>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           ))}
         </div>
@@ -371,9 +422,9 @@ export default function LoansPage() {
       {showRequestModal && (
         <Modal title="Request Loan" onClose={() => setShowRequestModal(false)}>
           <form onSubmit={requestForm.handleSubmit(handleLoanRequest)} className="space-y-4">
-            <Input {...requestForm.register('amount')} placeholder="Amount" />
-            <Input {...requestForm.register('duration')} placeholder="Duration (months)" />
-            <Input {...requestForm.register('interestRate')} placeholder="Interest %" />
+            <Input {...requestForm.register('amount')} placeholder="Amount" type="number" step="0.01" min="0" />
+            <Input {...requestForm.register('duration')} placeholder="Duration (months)" type="number" min="1" />
+            <Input {...requestForm.register('interestRate')} placeholder="Interest %" type="number" step="0.1" min="0" />
             <PrimaryButton>Submit Request</PrimaryButton>
           </form>
         </Modal>
@@ -382,7 +433,7 @@ export default function LoansPage() {
       {repayLoan && (
         <Modal title="Repay Loan" onClose={() => setRepayLoan(null)}>
           <p className="text-sm text-slate-600 mb-2">
-            Remaining balance: {formatCurrency(repayLoan.remainingAmount)}
+            Remaining balance: {formatCurrency(remainingBalance(repayLoan))}
           </p>
           <form onSubmit={repayForm.handleSubmit(handleRepayment)} className="space-y-4">
             <Input
@@ -391,7 +442,7 @@ export default function LoansPage() {
               type="number"
               step="0.01"
               min="0"
-              max={repayLoan.remainingAmount}
+              max={remainingBalance(repayLoan)}
             />
             <PrimaryButton>Confirm Payment</PrimaryButton>
           </form>
@@ -503,9 +554,16 @@ function Modal({ title, children, onClose }: any) {
   )
 }
 
-function Input(props: any) {
-  return <input {...props} className="w-full border border-slate-300 rounded-lg p-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-}
+const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
+  (props, ref) => (
+    <input
+      {...props}
+      ref={ref}
+      className="w-full border border-slate-300 rounded-lg p-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+    />
+  )
+)
+Input.displayName = 'Input'
 
 function PrimaryButton({ children }: any) {
   return <button className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700">{children}</button>

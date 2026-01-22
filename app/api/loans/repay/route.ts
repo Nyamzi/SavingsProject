@@ -3,74 +3,130 @@ import { prisma } from '@/lib/prisma'
 import { verifyToken, getTokenFromRequest } from '@/lib/auth'
 import { z } from 'zod'
 
-// Zod schema for repayment
 const repaySchema = z.object({
-  loanId: z.string(),
-  amount: z.number().positive(),
+  loanId: z.string().min(1),
+  amount: z.coerce.number().positive(),
 })
 
 export async function POST(request: NextRequest) {
   try {
-    // ----- 1. Authenticate user -----
     const token = getTokenFromRequest(request)
-    if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!token) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
     const payload = verifyToken(token)
-    if (!payload) return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
+    if (!payload) {
+      return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
+    }
 
-    const userId = payload.userId
-
-    // ----- 2. Validate request body -----
     const body = await request.json()
-    const { loanId, amount } = repaySchema.parse(body)
+    const validatedData = repaySchema.parse(body)
+    const userId = payload.userId
+    const repayAmount = Number(validatedData.amount)
 
-    // ----- 3. Fetch loan -----
-    const loan = await prisma.loan.findUnique({ where: { id: loanId } })
-    if (!loan) return NextResponse.json({ error: 'Loan not found' }, { status: 404 })
+    const loan = await prisma.loan.findUnique({
+      where: { id: validatedData.loanId },
+    })
 
-    if (loan.userId !== userId)
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!loan || loan.userId !== userId) {
+      return NextResponse.json({ error: 'Loan not found' }, { status: 404 })
+    }
 
-    if (loan.status === 'REJECTED')
-      return NextResponse.json({ error: 'Cannot repay a rejected loan' }, { status: 400 })
+    if (loan.status !== 'APPROVED' && loan.status !== 'ACTIVE') {
+      return NextResponse.json(
+        { error: 'Loan is not active for repayment' },
+        { status: 400 }
+      )
+    }
 
-    if (amount > loan.remainingAmount)
-      return NextResponse.json({ error: 'Repayment exceeds remaining balance' }, { status: 400 })
+    const totalExpected = Number(loan.amount) + (Number(loan.amount) * Number(loan.interestRate)) / 100
+    const remainingBalance = Math.max(0, totalExpected - Number(loan.totalRepaid))
 
-    // ----- 4. Calculate totals -----
-    const totalExpected = loan.amount + (loan.amount * (loan.interestRate / 100))
-    const newTotalRepaid = loan.totalRepaid + amount
+    if (repayAmount > remainingBalance) {
+      return NextResponse.json(
+        { error: 'Amount exceeds remaining balance' },
+        { status: 400 }
+      )
+    }
+
+    const savings = await prisma.savings.findUnique({
+      where: { userId },
+    })
+
+    if (!savings) {
+      return NextResponse.json({ error: 'Account not found' }, { status: 404 })
+    }
+
+    if (Number(savings.currentBalance) < repayAmount) {
+      return NextResponse.json(
+        { error: 'Insufficient current balance' },
+        { status: 400 }
+      )
+    }
+
+    const newTotalRepaid = Number(loan.totalRepaid) + repayAmount
     const newRemaining = Math.max(0, totalExpected - newTotalRepaid)
+    const newStatus = newRemaining === 0 ? 'COMPLETED' : 'ACTIVE'
 
-    // ----- 5. Update loan -----
     const updatedLoan = await prisma.loan.update({
       where: { id: loan.id },
       data: {
-        totalRepaid: newTotalRepaid,
         remainingAmount: newRemaining,
-        status: newRemaining === 0 ? 'COMPLETED' : loan.status,
-        updatedAt: new Date(),
+        totalRepaid: newTotalRepaid,
+        status: newStatus,
       },
     })
 
-    // ----- 6. Create transaction -----
+    await prisma.savings.update({
+      where: { userId },
+      data: {
+        currentBalance: { decrement: repayAmount },
+      },
+    })
+
     await prisma.transaction.create({
       data: {
         userId,
-        loanId: loan.id,
         type: 'LOAN_REPAYMENT',
-        amount,
-        description: `Repayment for loan ${loan.id}`,
+        amount: repayAmount,
+        description: 'Loan repayment',
+        loanId: loan.id,
       },
     })
 
-    // ----- 7. Return updated loan -----
-    return NextResponse.json({ success: true, loan: updatedLoan })
-  } catch (error) {
-    if (error instanceof z.ZodError)
-      return NextResponse.json({ error: 'Invalid input', details: error.errors }, { status: 400 })
+    const principal = Number(updatedLoan.amount)
+    const interestRate = Number(updatedLoan.interestRate)
+    const updatedTotalExpected = principal + (principal * interestRate) / 100
 
-    console.error('Repay loan error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({
+      success: true,
+      loan: {
+        id: updatedLoan.id,
+        amount: updatedLoan.amount,
+        interestRate: updatedLoan.interestRate,
+        duration: updatedLoan.duration,
+        status: updatedLoan.status,
+        remainingAmount: updatedLoan.remainingAmount,
+        totalRepaid: updatedLoan.totalRepaid,
+        totalExpected: updatedTotalExpected,
+        createdAt: updatedLoan.createdAt.toISOString(),
+        approvedAt: updatedLoan.approvedAt?.toISOString() || null,
+        dueDate: updatedLoan.dueDate?.toISOString() || null,
+      },
+    })
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { error: 'Invalid input', details: error.errors },
+        { status: 400 }
+      )
+    }
+
+    console.error('Loan repay error:', error)
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    )
   }
 }

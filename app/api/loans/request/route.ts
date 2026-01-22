@@ -4,13 +4,9 @@ import { verifyToken, getTokenFromRequest } from '@/lib/auth'
 import { z } from 'zod'
 
 const loanRequestSchema = z.object({
-  amount: z.string().refine((val) => parseFloat(val) > 0, {
-    message: 'Amount must be greater than 0',
-  }),
-  duration: z.string().refine((val) => parseInt(val) > 0, {
-    message: 'Duration must be greater than 0',
-  }),
-  interestRate: z.string().optional(),
+  amount: z.coerce.number().positive(),
+  duration: z.coerce.number().int().positive(),
+  interestRate: z.coerce.number().min(0).optional(),
   description: z.string().optional(),
 })
 
@@ -30,9 +26,11 @@ export async function POST(request: NextRequest) {
     const validatedData = loanRequestSchema.parse(body)
     const userId = payload.userId
 
-    const amount = parseFloat(validatedData.amount)
-    const duration = parseInt(validatedData.duration)
-    const interestRate = parseFloat(validatedData.interestRate || '5')
+    const amount = Number(validatedData.amount)
+    const duration = Number(validatedData.duration)
+    const interestRate = Number(validatedData.interestRate ?? 5)
+
+    const totalExpected = amount + (amount * interestRate) / 100
 
     // Create loan request
     const loan = await prisma.loan.create({
@@ -42,7 +40,7 @@ export async function POST(request: NextRequest) {
         interestRate,
         duration,
         status: 'PENDING',
-        remainingAmount: amount,
+        remainingAmount: totalExpected,
       },
     })
 
