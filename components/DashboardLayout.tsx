@@ -58,7 +58,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         { href: '/dashboard/settings', icon: Settings, label: 'Settings' },
       ]
     : [
-        { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+        { href: '/dashboard', icon: LayoutDashboard, label: 'My Profile' },
         { href: '/dashboard/savings', icon: Wallet, label: 'Savings' },
         { href: '/dashboard/loans', icon: CreditCard, label: 'Loans' },
         { href: '/dashboard/transactions', icon: History, label: 'Transactions' },
